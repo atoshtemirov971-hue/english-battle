@@ -202,9 +202,17 @@ function normalizeWord(w, index) {
 
 /* =============== AUDIO =============== */
 
+
+/* =============== AUDIO =============== */
+
+let audioRequestId = 0;
+
 function stopSpeech() {
+  audioRequestId++;
+
   if (audioPlayer) {
     audioPlayer.pause();
+    audioPlayer.currentTime = 0;
     audioPlayer = null;
   }
 
@@ -222,46 +230,98 @@ function validAudio(url) {
   }
 }
 
+async function getOnlineAudio(text) {
+  const key = String(text).trim().toLowerCase();
+
+  if (!key) return "";
+
+  try {
+    const response = await fetch(
+      "https://api.dictionaryapi.dev/api/v2/entries/en/" +
+      encodeURIComponent(key)
+    );
+
+    if (!response.ok) return "";
+
+    const data = await response.json();
+    const phonetics = data[0]?.phonetics || [];
+
+    for (const item of phonetics) {
+      const url = validAudio(item.audio || "");
+
+      if (url) return url;
+    }
+
+    return "";
+  } catch (error) {
+    console.error("Audio qidirishda xato:", error);
+    return "";
+  }
+}
+
 async function speak(text, slow = false) {
   stopSpeech();
 
+  const requestId = audioRequestId;
   const key = String(text).trim().toLowerCase();
-  const word = words.find(w => w.word.toLowerCase() === key);
 
-  const audio = validAudio(
+  if (!key) return;
+
+  const word = words.find(
+    w => String(w.word).toLowerCase() === key
+  );
+
+  let audioUrl = validAudio(
     word?.audio || ipaCache[key]?.audio || ""
   );
 
-  if (audio) {
+  if (!audioUrl) {
+    audioUrl = await getOnlineAudio(key);
+  }
+
+  if (requestId !== audioRequestId) return;
+
+  if (audioUrl) {
     try {
-      audioPlayer = new Audio(audio);
+      audioPlayer = new Audio(audioUrl);
+      audioPlayer.preload = "auto";
       audioPlayer.playbackRate = slow ? 0.75 : 1;
+
       await audioPlayer.play();
       return;
-    } catch {
+    } catch (error) {
+      console.error("Audio ijro xatosi:", error);
       audioPlayer = null;
     }
   }
 
-  if (!("speechSynthesis" in window)) {
-    toast("Brauzer audio talaffuzni qo'llamaydi", false);
+  if ("speechSynthesis" in window) {
+    const speech = new SpeechSynthesisUtterance(
+      String(text)
+    );
+
+    speech.lang = "en-US";
+    speech.rate = slow ? 0.65 : 0.9;
+    speech.pitch = 1;
+
+    const voices = speechSynthesis.getVoices();
+
+    speech.voice =
+      voices.find(v => v.lang === "en-US") ||
+      voices.find(v => v.lang.startsWith("en")) ||
+      null;
+
+    speechSynthesis.speak(speech);
     return;
   }
 
-  const speech = new SpeechSynthesisUtterance(String(text));
-  speech.lang = "en-US";
-  speech.rate = slow ? 0.65 : 0.9;
-  speech.pitch = 1;
-
-  const voices = speechSynthesis.getVoices();
-
-  speech.voice =
-    voices.find(v => v.lang === "en-US") ||
-    voices.find(v => v.lang.startsWith("en")) ||
-    null;
-
-  speechSynthesis.speak(speech);
+  toast(
+    "Bu so'z uchun audio topilmadi.",
+    false
+  );
 }
+
+/* =============== IPA =============== */
 
 /* =============== IPA =============== */
 
