@@ -200,30 +200,34 @@ function normalizeWord(w, index) {
   };
 }
 
-/* =============== AUDIO =============== */
+ 
+
+
+
+
 
 
 /* =============== AUDIO =============== */
 
 let audioRequestId = 0;
+const audioCache = {};
 
 function stopSpeech() {
   audioRequestId++;
 
   if (audioPlayer) {
     audioPlayer.pause();
-    audioPlayer.currentTime = 0;
     audioPlayer = null;
   }
 
   if ("speechSynthesis" in window) {
-    speechSynthesis.cancel();
+    window.speechSynthesis.cancel();
   }
 }
 
 function validAudio(url) {
   try {
-    const parsed = new URL(url);
+    const parsed = new URL(url, window.location.href);
     return parsed.protocol === "https:" ? parsed.href : "";
   } catch {
     return "";
@@ -235,6 +239,10 @@ async function getOnlineAudio(text) {
 
   if (!key) return "";
 
+  if (audioCache[key]) {
+    return audioCache[key];
+  }
+
   try {
     const response = await fetch(
       "https://api.dictionaryapi.dev/api/v2/entries/en/" +
@@ -244,17 +252,35 @@ async function getOnlineAudio(text) {
     if (!response.ok) return "";
 
     const data = await response.json();
-    const phonetics = data[0]?.phonetics || [];
 
-    for (const item of phonetics) {
-      const url = validAudio(item.audio || "");
+    const phonetics = data.flatMap(
+      entry => entry.phonetics || []
+    );
 
-      if (url) return url;
+    const urls = phonetics
+      .map(item => validAudio(item.audio || ""))
+      .filter(Boolean);
+
+    // 🇬🇧 British English birinchi tanlov
+    const british = urls.find(url =>
+      /-uk\.mp3/i.test(url)
+    );
+
+    // 🇺🇸 American English ikkinchi tanlov
+    const american = urls.find(url =>
+      /-us\.mp3/i.test(url)
+    );
+
+    const selected =
+      british || american || urls[0] || "";
+
+    if (selected) {
+      audioCache[key] = selected;
     }
 
-    return "";
+    return selected;
   } catch (error) {
-    console.error("Audio qidirishda xato:", error);
+    console.error("Audio qidirish xatosi:", error);
     return "";
   }
 }
@@ -271,55 +297,58 @@ async function speak(text, slow = false) {
     w => String(w.word).toLowerCase() === key
   );
 
-  let audioUrl = validAudio(
+  const savedAudio = validAudio(
     word?.audio || ipaCache[key]?.audio || ""
   );
 
-  if (!audioUrl) {
-    audioUrl = await getOnlineAudio(key);
-  }
+  const onlineAudio = await getOnlineAudio(key);
 
   if (requestId !== audioRequestId) return;
 
-  if (audioUrl) {
-    try {
-      audioPlayer = new Audio(audioUrl);
-      audioPlayer.preload = "auto";
-      audioPlayer.playbackRate = slow ? 0.75 : 1;
+  const candidates = [
+    onlineAudio,
+    savedAudio
+  ].filter((url, index, arr) =>
+    url && arr.indexOf(url) === index
+  );
 
-      await audioPlayer.play();
+  for (const url of candidates) {
+    if (requestId !== audioRequestId) return;
+
+    try {
+      const player = new Audio();
+      audioPlayer = player;
+
+      player.src = url;
+      player.preload = "auto";
+      player.playbackRate = slow ? 0.85 : 1;
+
+      await player.play();
+
+      if (requestId !== audioRequestId) {
+        player.pause();
+        return;
+      }
+
       return;
     } catch (error) {
-      console.error("Audio ijro xatosi:", error);
-      audioPlayer = null;
+      console.error("MP3 ijro xatosi:", error);
+
+      if (audioPlayer) {
+        audioPlayer.pause();
+        audioPlayer = null;
+      }
     }
   }
 
-  if ("speechSynthesis" in window) {
-    const speech = new SpeechSynthesisUtterance(
-      String(text)
+  if (requestId === audioRequestId) {
+    toast(
+      "Bu so'z uchun sifatli MP3 audio mavjud emas.",
+      false
     );
-
-    speech.lang = "en-US";
-    speech.rate = slow ? 0.65 : 0.9;
-    speech.pitch = 1;
-
-    const voices = speechSynthesis.getVoices();
-
-    speech.voice =
-      voices.find(v => v.lang === "en-US") ||
-      voices.find(v => v.lang.startsWith("en")) ||
-      null;
-
-    speechSynthesis.speak(speech);
-    return;
   }
-
-  toast(
-    "Bu so'z uchun audio topilmadi.",
-    false
-  );
 }
+
 
 /* =============== IPA =============== */
 
